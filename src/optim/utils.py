@@ -97,7 +97,7 @@ def optimal_est(P, type, order, sequence_length, generator, extra_args):
         jump = sequence_length // 2
         P1 = P[0]
         P2 = P[1]
-        x, y = get_batch(P, type, order, sequence_length, 4096, generator, extra_args)
+        x, y = get_batch(P, type, order, sequence_length, 64, generator, extra_args)
         powers = torch.Tensor([2**i for i in reversed(range(order))]).to(P.device)
         opt_logits = torch.zeros(x.size(0), x.size(1), P.size(1), device=P.device)
         if order > 1:
@@ -111,7 +111,7 @@ def optimal_est(P, type, order, sequence_length, generator, extra_args):
         opt_logits = torch.log(opt_logits)
         opt_loss = F.nll_loss(opt_logits.view(-1, opt_logits.size(-1)), y.view(-1), ignore_index=-1)
     else:
-        x, y = get_batch(P, type, order, sequence_length, 4096, generator, extra_args)
+        x, y = get_batch(P, type, order, sequence_length, 64, generator, extra_args)
         powers = torch.Tensor([2**i for i in reversed(range(order))]).to(P.device)
         opt_logits = torch.zeros(x.size(0), x.size(1), P.size(1), device=P.device)
         if order > 1:
@@ -126,67 +126,23 @@ def optimal_est(P, type, order, sequence_length, generator, extra_args):
 
 # Optimized Markov data generation (thank you @cekbote!)
 def get_batch(P, type, order, seq_length, batch_size, generator, extra_args):
-    data = torch.zeros(batch_size, seq_length+1, device=extra_args.device)
-    if P == None:
-        # Generate first k bits
-        alpha = 0.5
-        data[:, :order] = torch.bernoulli(alpha * torch.ones((batch_size, order), device=extra_args.device), generator=generator)
-        # Generate following bits
-        if type == "jump-markov":
-            jump = seq_length // 2
-            data[:, order:jump] = get_batch_from_past(data[:, :order], None, order, jump-order, batch_size, generator, extra_args.device, extra_args.dtype)
-            data[:, jump:] = get_batch_from_past(data[:, :jump], None, order, seq_length-jump+1, batch_size, generator, extra_args.device, extra_args.dtype)
-        else:
-            data[:, order:] = get_batch_from_past(data[:, :order], None, order, seq_length-order+1, batch_size, generator, extra_args.device, extra_args.dtype)
-    else:
-        # Use same fixed P for all sequences
-        if type == "jump-markov":
-            # Generate first k bits
-            alpha = 0.5
-            data[:, :order] = torch.bernoulli(alpha * torch.ones((batch_size, order), device=extra_args.device), generator=generator)
-            # Generate following bits
-            jump = seq_length // 2
-            data[:, order:jump] = get_batch_from_past(data[:, :order], P[0], order, jump-order, batch_size, generator, extra_args.device, extra_args.dtype)
-            data[:, jump:] = get_batch_from_past(data[:, :jump], P[1], order, seq_length-jump+1, batch_size, generator, extra_args.device, extra_args.dtype)
-        else:
-            # Generate first k bits
-            if extra_args.initial == 'steady':
-                if P.size(0) == 2:
-                    alpha = P[1,0] / (P[0,1] + P[1,0])
-                else:
-                    alpha = 0.5
-            elif extra_args.initial == 'uniform':
-                alpha = 0.5
-            else:
-                alpha = 0.5
-            data[:, :order] = torch.bernoulli(alpha * torch.ones((batch_size, order), device=extra_args.device), generator=generator)
-            # Generate following bits
-            data[:, order:] = get_batch_from_past(data[:, :order], P, order, seq_length-order+1, batch_size, generator, extra_args.device, extra_args.dtype)
-    x = data[:,:seq_length].to(int)
-    y = data[:,1:].to(int)
+    """
+    Returns batches (x, y) for stock data instead of synthetic Markov chains.
+    x: [batch_size, seq_length] of 0/1 (price down/up)
+    y: [batch_size, seq_length] shifted by 1 (next state prediction)
+    """
+    # Load preprocessed stock data (binary states: 0=down, 1=up)
+    stock_states = torch.load('../data/stock_states.pt')  # shape: [total_timesteps]
+    generator = torch.Generator(device='cpu')
+    # Randomly select starting indices for batches
+    max_start = 0
+    start_indices = torch.randint(0, max_start, (batch_size,), generator=generator)
     
-    return x, y
-
-def get_batch_from_past(past, P, order, seq_length, batch_size, generator, device, dtype):
-    if P is None:
-        P = get_random_P(order, batch_size, generator, device, dtype)
-    else:
-        P = P.unsqueeze(0).repeat(batch_size, 1, 1)
-    data = torch.zeros(batch_size, order+seq_length, device=device)
-    data[:,:order] = past[:,-order:]
-    batch_indices = torch.arange(batch_size)
-    powers = torch.Tensor([2**i for i in reversed(range(order))]).to(device)
-    for i in range(order, seq_length):
-        # Extract the previous 'order' symbols for the entire batch
-        prev_symbols = data[:, i-order:i]
-        # Compute indices using the dot product with powers of 2
-        idx = (prev_symbols @ powers).int()
-        # Fetch next symbols from the transition matrix P for each batch in parallel
-        next_symbols = torch.multinomial(P[batch_indices, idx], 1, generator=generator).squeeze(1)
-        data[:, i] = next_symbols
-
-    return data[:,order:]
-
+    # Extract sequences
+    x = torch.stack([stock_states[i:i+seq_length] for i in start_indices])
+    y = torch.stack([stock_states[i+1:i+1+seq_length] for i in start_indices])
+    
+    return x.to(extra_args.device), y.to(extra_args.device)
 
 @torch.no_grad()
 def eval(model, P, type, order, sequence_length, batch_size, generator, extra_args, max_num_batches=24, ctx=nullcontext()):
