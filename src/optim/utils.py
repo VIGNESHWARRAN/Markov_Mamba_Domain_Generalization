@@ -132,17 +132,35 @@ def get_batch(P, type, order, seq_length, batch_size, generator, extra_args):
     y: [batch_size, seq_length] shifted by 1 (next state prediction)
     """
     # Load preprocessed stock data (binary states: 0=down, 1=up)
-    stock_states = torch.load('../data/stock_states.pt')  # shape: [total_timesteps]
-    generator = torch.Generator(device='cpu')
+    stock_states = torch.load('/content/crypto_states.pt')  # shape: [total_timesteps]
+    
+    # Ensure data is on CPU for index operations
+    stock_states = stock_states.cpu()
+    
+    # Calculate maximum valid starting index
+    max_start = len(stock_states) - seq_length - 1
+    if max_start <= 0:
+        raise ValueError(f"Sequence length {seq_length} is too large for data size {len(stock_states)}")
+    
+    # Create generator if n
+    generator = torch.Generator(device='cpu')  # Generate indices on CPU
+    
     # Randomly select starting indices for batches
-    max_start = 0
-    start_indices = torch.randint(0, max_start, (batch_size,), generator=generator)
+    start_indices = torch.randint(
+        low=0,
+        high=max_start,
+        size=(batch_size,),
+        generator=generator,
+        device='cpu'  # Generate on CPU
+    )
     
-    # Extract sequences
-    x = torch.stack([stock_states[i:i+seq_length] for i in start_indices])
-    y = torch.stack([stock_states[i+1:i+1+seq_length] for i in start_indices])
+    # Extract sequences (ensure proper types)
+    x = torch.stack([stock_states[i:i+seq_length].long() for i in start_indices])
+    y = torch.stack([stock_states[i+1:i+1+seq_length].long() for i in start_indices])
     
+    # Move to target device
     return x.to(extra_args.device), y.to(extra_args.device)
+
 
 @torch.no_grad()
 def eval(model, P, type, order, sequence_length, batch_size, generator, extra_args, max_num_batches=24, ctx=nullcontext()):

@@ -20,13 +20,14 @@ def train_base(model, opt, P, type, order, scheduler, iterations, acc_steps, bat
     if P is not None:
         P_test = P
         print("Markov transition matrix:")
+        P = torch.tensor([[0.78784974, 0.21215026],
+                 [0.36115758, 0.63884242]])
+
         print(P)
     else:
-        if type == "jump-markov":
-            P_test = get_random_P(order, 2, generator, extra_args.device, extra_args.dtype)
-        else:
-            P_test = get_random_P(order, 1, generator, extra_args.device, extra_args.dtype).squeeze(0)
         print("Test Markov transition matrix:")
+        P_test = torch.tensor([[0.78784974, 0.21215026],
+                 [0.36115758, 0.63884242]])
         print(P_test)
     
     # Optimal test loss
