@@ -28,13 +28,21 @@ class DGMamba2(Mamba2):
     def apply_state_suppression(self, hidden_states):
         if not self.dg_enabled or self.current_epoch < getattr(self.config, 'dg_start_epoch', 0):
             return hidden_states
-            
-        # Original DG-Mamba suppression logic
+        
+        # Gradual suppression scheduling
+        ramp_epochs = 200  # Fixed ramp-up period
+        current_progress = min(1.0, max(0.0, self.current_epoch / ramp_epochs))
+        
+        # Adjust parameters based on progress
+        effective_lambda = self.suppress_lambda * current_progress
+        effective_threshold = self.suppress_threshold * (1.0 - 0.3 * current_progress)  # Starts 30% wider
+        
+        # Original DG-Mamba suppression logic with gradual parameters
         state_activations = torch.norm(hidden_states, dim=1)
         max_vals = state_activations.max(dim=-1, keepdim=True)[0].clamp(min=1e-6)
         batch_activations = state_activations / max_vals
         
-        suppress_mask = (batch_activations < self.suppress_threshold).float()
+        suppress_mask = (batch_activations < effective_threshold).float()
         
         if self.min_active_states > 0:
             topk = torch.topk(batch_activations, 
@@ -43,7 +51,7 @@ class DGMamba2(Mamba2):
             min_threshold = topk.values[:, -1].unsqueeze(-1)
             suppress_mask = suppress_mask * (batch_activations < min_threshold).float()
         
-        suppression_factor = 1.0 - self.suppress_lambda * suppress_mask.unsqueeze(1)
+        suppression_factor = 1.0 - effective_lambda * suppress_mask.unsqueeze(1)
         return hidden_states * suppression_factor
         
     def forward(self, hidden_states, save_weights=False, check_conditions=False):
